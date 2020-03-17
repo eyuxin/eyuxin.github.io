@@ -1,10 +1,10 @@
 # Site settings
-title: 
-SEOTitle: 鄂宇鑫的博客 | BY Blog
+title: 小⑦的博客
+SEOTitle: 小⑦的博客 
 header-img: img/post-bg-debug.png
 email: eyxforwork@gmail.com
 description: "Every failure is leading towards success."
-keyword: "BY, BY Blog, 鄂宇鑫的博客, eyuxin, 鄂宇鑫, iOS, Apple, iPhone"
+keyword: "小⑦, 小⑦ Blog, 小⑦的博客, iOS, Apple, iPhone"
 url: "http://eyuxin.github.io"          # your host, for absolute URL
 baseurl: ""      # for example, '/blog' if your blog hosted on 'host/blog'
 github_repo: "https://github.com/eyuxin/eyuxin.github.io.git" # you code repository
