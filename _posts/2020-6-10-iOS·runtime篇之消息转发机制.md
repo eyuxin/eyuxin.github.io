@@ -7,7 +7,7 @@ author:     eyuxin
 header-img: img/post-bg-e2.jpg
 catalog: true
 tags:
-    - iOS
+    - runtime
     - 消息转发机制
 ---
 

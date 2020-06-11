@@ -8,7 +8,7 @@ header-img: img/post-bg-e3.jpg
 catalog: true
 tags:
     - iOS
-    - 消息转发机制
+    - runtime
 ---
 
 
@@ -88,6 +88,16 @@ struct class_rw_t {
 ```
 
 `objc_class` 继承自 `objc_object`，因此它也拥有了 `isa` 指针。除此之外，它的结构体中还保存了指向父类的指针、缓存、实例变量列表、方法列表、遵守的协议等。
+
+>   关于super
+>
+>   1.  super不是指针 不指向父类的实例 
+>
+>   2.  在当前类打印self class 和 super class 都会返回当前类
+>
+>   3.  从runtime的底层API来看..调用[self class] 的时候是调用了objc_msgSend(self,@selector(class)),直接从当前实例里找class的实现; 
+>
+>       调用[super class]的时候是调用了objc_msgSendSuper
 
 ## 元类
 
@@ -431,5 +441,11 @@ MJExtension是用的这一特性实现Model和Dictionary转换
 
 #### 6.利用消息转发机制
 
-见[消息转发篇]()
+见[消息转发篇]([http://e-yuxin.com/2020/06/10/iOS-runtime%E7%AF%87%E4%B9%8B%E6%B6%88%E6%81%AF%E8%BD%AC%E5%8F%91%E6%9C%BA%E5%88%B6/](http://e-yuxin.com/2020/06/10/iOS-runtime篇之消息转发机制/))
+
+
+
+参考：
+
+
 
