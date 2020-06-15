@@ -24,9 +24,15 @@ tags:
     先显示占位图, 然后交给SDWebImageManager根据URL开始处理图片
 
 2.  SDImageCache类先从内存缓存查找是否有图片缓存，如果内存中已经有图片缓存，则直接回调到前端进行图片的显示。
+
 3.  如果内存缓存中没有，则生成NSInvocationOperation添加到队列开始从硬盘中查找图片是否已经缓存。根据url为key在硬盘缓存目录下尝试读取图片文件，这一步是在NSOperation下进行的操作，所以需要回到主线程进行查找结果的回调。如果从硬盘读取到了图片，则将图片添加到内存缓存中，然后再回调到前端进行图片的显示。如果从硬盘缓存目录读取不到图片，说明所有缓存都不存在该图片，则需要下载图片。
+
 4.  共享或重新生成一个下载器SDWebImageDownloader开始下载图片。图片的下载由NSURLConnection来处理，实现相关delegate来判断的下载状态：下载中、下载完成和下载失败。
+
 5.  图片数据下载完成之后，交给SDWebImageDecoder类做图片解码处理，图片的解码处理在NSOperationQueue完成，不会阻塞主线程。在图片解码完成后，会回调给SDWebImageDownloader，然后回调给SDWebImageManager告知图片下载完成，通知所有的downloadDelegates下载完成，回调给需要的地方显示图片。
+
+    这里面还涉及到大图的压缩操作，通过SDWebImageDownloaderScaleDownLargeImages来决定是否对下载的大图进行压缩。
+
 6.  最后将图片通过SDImageCache类，同时保存到内存缓存和硬盘缓存中。写文件到硬盘的过程也在以单独NSInvocationOperation完成，避免阻塞主线程。
 
 
@@ -281,27 +287,6 @@ static const CGFloat kDestSeemOverlap = 2.0f;
     }
 }
 
-// 是否需要减少原始图片的大小
-+ (BOOL)shouldScaleDownImage:(nonnull UIImage *)image {
-    BOOL shouldScaleDown = YES;
-    
-    CGImageRef sourceImageRef = image.CGImage;
-    CGSize sourceResolution = CGSizeZero;
-    sourceResolution.width = CGImageGetWidth(sourceImageRef);
-    sourceResolution.height = CGImageGetHeight(sourceImageRef);
-    // 图片总共像素
-    float sourceTotalPixels = sourceResolution.width * sourceResolution.height;
-    // 如果图片的总像素大于一定比例，则需要做简化处理
-    float imageScale = kDestTotalPixels / sourceTotalPixels;
-    if (imageScale < 1) {
-        shouldScaleDown = YES;
-    } else {
-        shouldScaleDown = NO;
-    }
-    
-    return shouldScaleDown;
-}
-
 // 获取图片的色彩空间
 + (CGColorSpaceRef)colorSpaceForImageRef:(CGImageRef)imageRef {
     // current
@@ -322,6 +307,163 @@ static const CGFloat kDestSeemOverlap = 2.0f;
 #### SDWebImageCompat
 
 该类就提供了一个全局方法`SDScaledImageForKey`，这个方法根据原始图片绘制一张放大或者缩小的图片。
+
+## 图片压缩部分
+
+图片压缩主要问题是大图在进行图片解码的时候比较耗内存，如果图片特别大会导致单张图片的内存压力比较大。 我们可以通过设置SDWebImageDownloaderScaleDownLargeImages来让SD在解码图片的过程中进行压缩  **边解码边压缩**
+
+压缩的核心思路是：将图像矩阵按照规则分割成小型子矩阵进行压缩，然后插值拼接。这里应该是参照了[苹果文档](https://developer.apple.com/library/archive/samplecode/LargeImageDownsizing/Introduction/Intro.html)。
+
+代码如下：
+
+```objective-c
+- (nullable UIImage *)sd_decompressedAndScaledDownImageWithImage:(nullable UIImage *)image {
+    if (![[self class] shouldDecodeImage:image]) {
+        return image;
+    }
+    
+    if (![[self class] shouldScaleDownImage:image]) {
+        return [self sd_decompressedImageWithImage:image];
+    }
+    
+    CGContextRef destContext;
+    
+    // autorelease the bitmap context and all vars to help system to free memory when there are memory warning.
+    // on iOS7, do not forget to call [[SDImageCache sharedImageCache] clearMemory];
+    @autoreleasepool {
+        CGImageRef sourceImageRef = image.CGImage;
+        
+        CGSize sourceResolution = CGSizeZero;
+        sourceResolution.width = CGImageGetWidth(sourceImageRef);
+        sourceResolution.height = CGImageGetHeight(sourceImageRef);
+        float sourceTotalPixels = sourceResolution.width * sourceResolution.height;
+        // Determine the scale ratio to apply to the input image
+        // that results in an output image of the defined size.
+        // see kDestImageSizeMB, and how it relates to destTotalPixels.
+        float imageScale = kDestTotalPixels / sourceTotalPixels;
+        CGSize destResolution = CGSizeZero;
+        destResolution.width = (int)(sourceResolution.width*imageScale);
+        destResolution.height = (int)(sourceResolution.height*imageScale);
+        
+        // device color space
+        CGColorSpaceRef colorspaceRef = SDCGColorSpaceGetDeviceRGB();
+        BOOL hasAlpha = SDCGImageRefContainsAlpha(sourceImageRef);
+        // iOS display alpha info (BGRA8888/BGRX8888)
+        CGBitmapInfo bitmapInfo = kCGBitmapByteOrder32Host;
+        bitmapInfo |= hasAlpha ? kCGImageAlphaPremultipliedFirst : kCGImageAlphaNoneSkipFirst;
+        
+        // kCGImageAlphaNone is not supported in CGBitmapContextCreate.
+        // Since the original image here has no alpha info, use kCGImageAlphaNoneSkipLast
+        // to create bitmap graphics contexts without alpha info.
+        destContext = CGBitmapContextCreate(NULL,
+                                            destResolution.width,
+                                            destResolution.height,
+                                            kBitsPerComponent,
+                                            0,
+                                            colorspaceRef,
+                                            bitmapInfo);
+        
+        if (destContext == NULL) {
+            return image;
+        }
+        CGContextSetInterpolationQuality(destContext, kCGInterpolationHigh);
+        
+        // Now define the size of the rectangle to be used for the
+        // incremental blits from the input image to the output image.
+        // we use a source tile width equal to the width of the source
+        // image due to the way that iOS retrieves image data from disk.
+        // iOS must decode an image from disk in full width 'bands', even
+        // if current graphics context is clipped to a subrect within that
+        // band. Therefore we fully utilize all of the pixel data that results
+        // from a decoding opertion by achnoring our tile size to the full
+        // width of the input image.
+        CGRect sourceTile = CGRectZero;
+        sourceTile.size.width = sourceResolution.width;
+        // The source tile height is dynamic. Since we specified the size
+        // of the source tile in MB, see how many rows of pixels high it
+        // can be given the input image width.
+        sourceTile.size.height = (int)(kTileTotalPixels / sourceTile.size.width );
+        sourceTile.origin.x = 0.0f;
+        // The output tile is the same proportions as the input tile, but
+        // scaled to image scale.
+        CGRect destTile;
+        destTile.size.width = destResolution.width;
+        destTile.size.height = sourceTile.size.height * imageScale;
+        destTile.origin.x = 0.0f;
+        // The source seem overlap is proportionate to the destination seem overlap.
+        // this is the amount of pixels to overlap each tile as we assemble the ouput image.
+        float sourceSeemOverlap = (int)((kDestSeemOverlap/destResolution.height)*sourceResolution.height);
+        CGImageRef sourceTileImageRef;
+        // calculate the number of read/write operations required to assemble the
+        // output image.
+        int iterations = (int)( sourceResolution.height / sourceTile.size.height );
+        // If tile height doesn't divide the image height evenly, add another iteration
+        // to account for the remaining pixels.
+        int remainder = (int)sourceResolution.height % (int)sourceTile.size.height;
+        if(remainder) {
+            iterations++;
+        }
+        // Add seem overlaps to the tiles, but save the original tile height for y coordinate calculations.
+        float sourceTileHeightMinusOverlap = sourceTile.size.height;
+        sourceTile.size.height += sourceSeemOverlap;
+        destTile.size.height += kDestSeemOverlap;
+        for( int y = 0; y < iterations; ++y ) {
+            @autoreleasepool {
+                sourceTile.origin.y = y * sourceTileHeightMinusOverlap + sourceSeemOverlap;
+                destTile.origin.y = destResolution.height - (( y + 1 ) * sourceTileHeightMinusOverlap * imageScale + kDestSeemOverlap);
+                sourceTileImageRef = CGImageCreateWithImageInRect( sourceImageRef, sourceTile );
+                if( y == iterations - 1 && remainder ) {
+                    float dify = destTile.size.height;
+                    destTile.size.height = CGImageGetHeight( sourceTileImageRef ) * imageScale;
+                    dify -= destTile.size.height;
+                    destTile.origin.y += dify;
+                }
+                CGContextDrawImage( destContext, destTile, sourceTileImageRef );
+                CGImageRelease( sourceTileImageRef );
+            }
+        }
+        
+        CGImageRef destImageRef = CGBitmapContextCreateImage(destContext);
+        CGContextRelease(destContext);
+        if (destImageRef == NULL) {
+            return image;
+        }
+        UIImage *destImage = [[UIImage alloc] initWithCGImage:destImageRef scale:image.scale orientation:image.imageOrientation];
+        CGImageRelease(destImageRef);
+        if (destImage == nil) {
+            return image;
+        }
+        return destImage;
+    }
+}
+```
+
+```objective-c
+// 是否需要减少原始图片的大小
++ (BOOL)shouldScaleDownImage:(nonnull UIImage *)image {
+    BOOL shouldScaleDown = YES;
+    
+    CGImageRef sourceImageRef = image.CGImage;
+    CGSize sourceResolution = CGSizeZero;
+    sourceResolution.width = CGImageGetWidth(sourceImageRef);
+    sourceResolution.height = CGImageGetHeight(sourceImageRef);
+    // 图片总共像素
+    float sourceTotalPixels = sourceResolution.width * sourceResolution.height;
+    // 如果图片的总像素大于一定比例，则需要做简化处理
+    float imageScale = kDestTotalPixels / sourceTotalPixels;
+    if (imageScale < 1) {
+        shouldScaleDown = YES;
+    } else {
+        shouldScaleDown = NO;
+    }
+    
+    return shouldScaleDown;
+}
+```
+
+
+
+
 
 
 
