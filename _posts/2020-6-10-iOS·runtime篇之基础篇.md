@@ -361,6 +361,10 @@ KVO的大致实现原理：
 
 当一个对象使用了KVO监听，iOS系统会修改这个对象的isa指针(**sa-swizzling**)，改为指向一个全新的通过Runtime动态创建的子类NSKVONotifyin_xxx，子类拥有自己的set方法实现，set方法实现内部会顺序调用**willChangeValueForKey方法、原来的setter方法实现、didChangeValueForKey方法，而didChangeValueForKey方法内部又会调用监听器的observeValueForKeyPath:ofObject:change:context:监听方法。**
 
+KVO 的实现也是依赖于 runtime 中的 `isa-swizzling`。
+
+当观察某对象 A 时，KVO 机制动态创建一个新的名为：`NSKVONotifying_A` 的新类，该类继承自对象 A 的本类，且 KVO 为 `NSKVONotifying_A` 重写观察属性的 setter 方法，setter 方法会负责在调用原 setter 方法之前和之后，通知所有观察对象属性值的更改情况。
+
 #### 4.获取属性信息
 
 **class_copyPropertyList**获取属性列表

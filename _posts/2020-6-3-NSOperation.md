@@ -4,7 +4,7 @@ title:      NSOpration
 subtitle:   NSOpration的使用
 date:       2020-6-3
 author:     eyuxin
-header-img: 
+header-img: img/post-bg-e8.jpg
 catalog: true
 tags:
     - iOS

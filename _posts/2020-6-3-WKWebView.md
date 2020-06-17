@@ -4,7 +4,7 @@ title:      WKWebView
 subtitle:   WKWebView总结
 date:       2020-6-3
 author:     eyuxin
-header-img: 
+header-img: img/post-bg-e7.jpg
 catalog: true
 tags:
     - iOS
@@ -275,3 +275,4 @@ func webView(_ webView: WKWebView,
 以前，获取网页的屏幕快照意味着弄乱视图层和图形上下文。 因此，一个干净的单一方法选项是该API的一个受欢迎的补充。
 
 实际上，您每天使用的许多应用程序都依赖WebKit来呈现特别棘手的内容。 您可能没有注意到的事实应该表明网页浏览量与应用开发最佳做法一致。
+
